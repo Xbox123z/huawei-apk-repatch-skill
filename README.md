@@ -89,6 +89,19 @@ Grok 内置 **PairIP / AppDetex**：启动弹授权页，查不到 Google Play �
 pm set-app-links --package <pkg> 2 all    # 一行修复
 ```
 
+### 5. 改不动就自己造 —— 本机从零搭 APK 构建工具链
+遇到**服务端完整性锁**（ChatGPT 的 Play Integrity，客户端 patch 无解）的正解不是硬啃，
+是**自己造一个 WebView 壳**把目标网页包成原生 App。全程在手机上完成，无电脑无 root：
+
+```bash
+bash scripts/build-toolchain/setup_toolchain.sh          # java+apktool+aapt2+framework 一键装
+bash scripts/build-toolchain/build_apk.sh templates/webview-shell myapp.apk   # 编译+签名一条龙
+```
+
+实测：手写 6.3KB 的 `com.apple.maps`（把 **maps.apple.com** 包成 App），装进华为稳定运行。
+`templates/webview-shell/` 改包名/label/URL 三处即可包任意网页。
+（含 smali 寄存器计数、`usesFramework.ids`、libexpat 借系统、tmpdir 等一整套坑的固化。）
+
 ---
 
 ## 📦 内容
@@ -97,14 +110,20 @@ pm set-app-links --package <pkg> 2 all    # 一行修复
 huawei-apk-repatch-skill/
 ├── README.md              ← 你在这里
 ├── SKILL.md               ★ 主文档：完整流程 + 决策树 + 排障速查表
-├── CASE-STUDY.md          ★ 全程复盘：15 步时间线，含每一条弯路
-└── scripts/               全部为实战跑通的原件，非演示代码
-    ├── build_single_apk.py        AXML 二进制 minSdk 补丁 + zipalign 重建
-    ├── add_v1.py                  v1 JAR 签名（CRLF · 72 字节折行 · detached PKCS#7）
-    ├── sign_v2.js                 v2 签名（AOSP 对齐，digests algo 已修正）
-    ├── dexpatch.py                最小 DEX 编辑器（类/方法定位 · 方法体替换 · header 重算）
-    ├── verify_apk.py              独立 v1+v2 校验器（拒绝自证，实测 4/4 通过）
-    └── adb-local/bootstrap_adb.sh 本机 adb 自连引导脚本
+├── CASE-STUDY.md          ★ 六个案例全程复盘，含每一条弯路
+├── scripts/               全部为实战跑通的原件，非演示代码
+│   ├── rebuild_splits.py          ★ XAPK/split 套装一条命令重建（minSdk+保 services+对齐）
+│   ├── kill_pairip.py             ★ PairIP/AppDetex 一键拆锁（回归验证过）
+│   ├── build_single_apk.py        AXML 二进制 minSdk 补丁 + zipalign 重建
+│   ├── add_v1.py                  v1 JAR 签名（CRLF · 72 字节折行 · detached PKCS#7）
+│   ├── sign_v2.js                 v2 签名（AOSP 对齐，digests algo 已修正）
+│   ├── dexpatch.py                最小 DEX 编辑器（类/方法定位 · 方法体替换 · header 重算）
+│   ├── verify_apk.py              独立 v1+v2 校验器（拒绝自证，实测 4/4 通过）
+│   ├── adb-local/bootstrap_adb.sh 本机 adb 自连引导脚本
+│   └── build-toolchain/           ★ 本机从零搭 APK 构建工具链（无电脑无 root）
+│       ├── setup_toolchain.sh     java + apktool + aapt2 + framework 一键装
+│       └── build_apk.sh           编译 apktool 工程 + v1/v2 签名一条龙
+└── templates/webview-shell/  ★ 可复用 WebView 壳工程：改包名/label/URL 包任意网页成原生 App
 ```
 
 **投喂方式**：把 `SKILL.md` 直接丢给任何有 shell 的 AI agent，它就能复现整套操作。
