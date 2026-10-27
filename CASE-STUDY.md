@@ -125,3 +125,55 @@ rebuild(STORE≥8) → add_v1(STORE≥8，重写 zip 会毁对齐！) → sign_v
 | OpenBot 首攻 | ~20 | 顺利（skill 生效） |
 | OpenBot 返工 | ~25 | 验证方法错误导致绕路（已固化为 §6 验收标准） |
 
+---
+
+# 第四案例：ChatGPT 1.2026.286（"侦察先行"省掉一半工序，2026-10-27）
+
+目标：`com.openai.chatgpt`（APKPure XAPK 109.6MB，4-split）。设备同上。
+**结果：从下载到出登录页 15 分钟，零试错**——侦察做够就能砍掉不该做的工序。
+
+## 侦察结论直接决定工作量（关键价值）
+| 检查项 | ChatGPT 结果 | 因此省掉 |
+|---|---|---|
+| minSdk | **32** > 设备 31 | 改包这条跑不掉 |
+| PairIP / AppDetex / ILicensingService | **完全没有** | ❌ 不用 dex 手术（省掉最硬核、最易错的一步） |
+| Play Integrity | 有引用但不阻塞启动 | 不用拆（GMS 26.41 + GSF 7.0 已装，运行期能过） |
+| 是否 RN/Hermes | **原生 Kotlin**（无 index.android.bundle） | 无 Hermes 对齐雷（STORE≥8 照跑，无害） |
+| targetSdk | **37**（远超设备 31） | 实测可装：**targetSdk 高于设备 SDK 不拦，只有 minSdk 拦** |
+
+## 新脚本 rebuild_splits.py（补上 skill 的真实缺口）
+之前排障表写着「改走 split 套装安装」却**没给脚本**，导致每次现写重建循环——
+OpenBot 那次就是现写时删掉了 META-INF/services。现已固化：
+```bash
+python3 scripts/rebuild_splits.py app.xapk out/ --from 32 --to 31
+```
+实现要点（注释里都有）：按 local header 原始字节读条目（保留原 compress_type，不解压再压）；
+AXML 用「元素名 + 属性名」双条件匹配（同值 32 也会出现在 maxSdkVersion 上）；
+输出 `services kept=N` 让保留情况可见；自动报告改动数为 0 时提示核对真实 minSdk。
+
+## 脚本泛化（换任务可直接跑）
+add_v1.py / sign_v2.js 改为环境变量喂路径：`SIGN_KEY` / `SIGN_CERT` / `FORGE_PATH`，
+不再硬编码 grok_build 绝对路径。
+
+## 本轮运维坑（4 个，均已入 §0/§7）
+1. **apkeep 下载截断**：首下 2MB（实际 109MB）且不是 zip。必须「下载 → testzip → 体积阈值」循环重试
+2. **adb server 中途崩**：客户端被 SELinux 拒 `execl` 无法自动 fork server。
+   恢复：`nohup env LD_LIBRARY_PATH=... adb -P 5037 server nodaemon &` 然后 `connect 127.0.0.1:5555`
+3. **`pkill -f "adb.*5037"` 把自己杀了**：该 shell 自己的命令行含此串 → 整条命令 SIGTERM。
+   改用 `pkill -x adb`（精确进程名），**永远别用 -f 杀自己链路上的进程**
+4. **VPN 分应用排除名单又坑新 App**（与 Grok 同根因）：v2rayNG 排除段 `10445-99999` 覆盖所有普通 App uid
+   → 新装 App 默认**不走代理** → 境外域名直连失败。
+   → **每次装新 App 后必做**：去 v2rayNG 勾选该 App 或改全局代理（已列为标准善后步骤）
+
+## 验收（§6 标准一次通过）
+`mHasSurface=true` + `isVisible=true` + crash 计数 0 + 截图见 "Welcome to ChatGPT" 登录页。
+
+## 四案例成本曲线
+| 案例 | 步数 | 说明 |
+|---|---|---|
+| Grok 1.2.50 | 100+ | 从零探路，签名库 bug + dex 编码三轮试错 |
+| OpenBot 首攻 | ~20 | skill 生效 |
+| OpenBot 返工 | ~25 | 新坑（Hermes 对齐）+ 验证方法错误 |
+| ChatGPT | ~15 | **侦察砍掉一半工序，零试错** |
+
+
