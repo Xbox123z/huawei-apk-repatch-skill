@@ -42,7 +42,7 @@
 | **可用工具** | 一个设备上的 shell + 无障碍 UI 自动化（电脑 ADB 中途死掉，Shizuku 反复掉线） |
 | **结果** | ✅ 完整安装 · ✅ 稳定运行 · ✅ OAuth 连接器正常 |
 | **复跑验证** | 2026-10-27 · OpenBot 1.4.1（run.openbot.mobile，同款 PairIP）· **约 20 步 / 15 分钟搞定**（Grok 当年 100+ 步）|
-| **第三战** | 2026-10-27 · ChatGPT 1.2026.286（com.openai.chatgpt，minSdk 32 / targetSdk 37 / 4-split）· **15 分钟零试错** —— 侦察砍掉了 dex 手术整道工序 |
+| **第三战** | 2026-10-27 · ChatGPT 1.2026.286（minSdk 32 / 4-split）· 改包 15 分钟完成、能装能渲染 —— 但登录被 **Play Integrity 服务端锁**卡死（能力边界，见 §1 第 0 关）|
 | **代价** | 6 轮试错，约 1 亿 token，**全部踩坑已写进本文档** |
 
 ---
@@ -132,6 +132,10 @@ targetSdk 37 > 设备 31 → 实测不拦安装   ⏭️  省掉降级找旧版
 ```
 
 **结论：动手前先把包扫干净，每砍一项就少一轮"改包→重签→重装→验证"的完整循环。**
+
+> ⚠️ 但 ChatGPT 同时立了本 skill 的**能力边界**：如果 App 登录依赖 **Google Play Integrity / DeviceCheck**
+> （服务器返回 `preauth_cookie_device_check_failed` 之类），**全套手术都救不了**——那是 TrustZone 硬件密钥 +
+> 服务端双重锁，非认证机型 + 重签名必然失败。**第 0 关先判锁在客户端还是服务端，判完再动手。**
 
 ---
 
