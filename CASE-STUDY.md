@@ -38,3 +38,44 @@
 - dex 编码三轮试错（每轮全量重签+重装+验证）
 - 通道探测与恢复（无障碍/Shizuku/adb 各自掉线的处理）
 - 建议：复用本 skill 时，先做 §1 侦察 + §5 的授权 SDK 检查，可跳过 60% 弯路
+
+---
+
+# 第二案例：OpenBot 1.4.1（skill 复跑验证，2026-10-27）
+
+**skill 写完后第一次被真正复用——验证了方法论可迁移，同时暴露两个新坑（均已回写 SKILL.md）。**
+
+目标：`run.openbot.mobile`（CMU 开源自动驾驶 App，APKPure 下载，4-split，minSdk **24**，targetSdk 36）。
+症状：用户报「闪退」。
+
+## 与 Grok 的关键差异（侦察的价值）
+| | Grok 1.2.50 | OpenBot 1.4.1 |
+|---|---|---|
+| minSdk | 32 > 设备 31 → **必须改包** | 24 < 31 → **不用改，安装本来就成功** |
+| 授权 SDK | PairIP | PairIP（同一款） |
+| 锁在哪 | classes.dex | **classes2.dex**（多 dex 必须全扫） |
+| 退出方式 | Activity.finish | `finishAndRemoveTask` + `System.exit` |
+| `Activity.finish` method_id | 存在 | **不存在**（R8 内联掉了） |
+
+## 流程（比 Grok 快一个数量级，约 20 步 vs 100+ 步）
+1. 本机 adb 自连恢复（server 起不来 = 后台进程漏传 `LD_LIBRARY_PATH`，`nohup env LD_LIBRARY_PATH=... adb server nodaemon` 修复）
+2. 定位包：Download 里 xapk 文件名被浏览器截断（`_2839ae1b.xapk`），**用 AXML 解析 package 名识别**，不靠文件名
+3. `pm list packages` 发现已装 → 直接启动抓 logcat → 立刻看到 `LicenseClient: Could not bind with the licensing service` → 确诊 PairIP，跳过改包
+4. 扫 5 个 dex 定位 PairIP 在 classes2.dex；dump 方法表确认与 Grok 同构
+5. onStart 补丁：`Activity.finish` 找不到 → 反汇编 `exitApp` 发现它调自己的 `finishAndRemoveTask`（本类 method id）→ 用它替代
+6. 拆 LicenseClient 20 方法 + LicenseActivity 10 方法 → 重签 4 split → 装
+
+## 新坑 A：META-INF 一刀切（我即兴手搓重建循环又踩了 skill 记录过的坑）
+`if name.startswith('META-INF/'): continue` 删光 services → `ExceptionInInitializerError: Module with the Main dispatcher is missing`。
+skill 自带的 add_v1.py 谓词本来是对的——**教训：复用 skill 脚本，别即兴重写**。
+
+## 新坑 B：R8 会内联掉 finish
+不能假设 `Landroid/app/Activity;->finish` 的 method_id 存在于目标 dex。
+反汇编同类退出路径（exitApp/closeApp）看它实际调什么再定 method_id。
+
+## 结果
+`LicenseActivity` 出现 **0 次**、`LicenseClient` 日志 **0 行**、进程 30s+ 稳定、无 crash/ANR/SoLoader 失败。
+
+## 推论
+PairIP/AppDetex 是通用商业防盗版方案（Grok、OpenBot 都带）。
+「装上就闪退 + logcat 有 licensing service 绑定失败」→ 直接套 SKILL §5，命中率高。
