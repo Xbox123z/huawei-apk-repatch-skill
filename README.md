@@ -41,6 +41,7 @@
 | **设备** | Huawei CLS-AL00 · EMUI 12 · **Android 12 (API 31)** · 无 GMS · 无 root |
 | **可用工具** | 一个设备上的 shell + 无障碍 UI 自动化（电脑 ADB 中途死掉，Shizuku 反复掉线） |
 | **结果** | ✅ 完整安装 · ✅ 稳定运行 · ✅ OAuth 连接器正常 |
+| **复跑验证** | 2026-10-27 · OpenBot 1.4.1（run.openbot.mobile，同款 PairIP）· **约 20 步 / 15 分钟搞定**（Grok 当年 100+ 步）|
 | **代价** | 6 轮试错，约 1 亿 token，**全部踩坑已写进本文档** |
 
 ---
