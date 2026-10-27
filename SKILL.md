@@ -178,6 +178,7 @@ adb shell "logcat -d | grep -aciE 'misalign|JavascriptException|FATAL'"   # 应�
 | patch onStart 时找不到 Activity.finish 的 method_id | R8 已内联掉 finish | 反汇编 exitApp/closeApp 找真实退出调用（常见 finishAndRemoveTask） |
 | VerifyError invalid reg index | 3rc 的 word2 缺 count<<8 | word2=(count<<8)\|vstart |
 | VerifyError invalid arg count(0) | 35c 数量位写进 word2 | word0=(count<<12)\|op |
+| VerifyError "tried to get class from non-reference register" / "'this' argument not instance of Activity" | 手写 smali 的 `.registers` 数少了（没算参数/this） | `.registers N`，N = 本地寄存器 + 参数个数（含 p0=this）；见 §8 |
 | 整包 ClassNotFoundException | 清 tries 但没删 try_item 字节 | 不动元数据，入口 return 即可 |
 | 装上后一直卡住/白屏但不崩溃（RN 应用） | Hermes mmap bundle 偏移 mod8≠0 → `Compiling JS failed: Buffer misaligned.` | 全链路 STORE≥8 对齐（§2），改后重装 |
 | 用几分钟就闪退 | LicenseClient 周期复检定时器 | 第 5 步全量 neuter |
@@ -190,7 +191,24 @@ adb shell "logcat -d | grep -aciE 'misalign|JavascriptException|FATAL'"   # 应�
 | 下载下来的 xapk 只有几 MB / 不是 zip | 下载截断或反爬页 | 循环「下载→testzip→体积阈值」重试 |
 | 华为弹窗找不到关闭 | 纯净模式=多组件策略非单 App | 用 pm 会话安装直接绕开 |
 
-## 8. 文件清单
+## 8. 从零构建 APK（当"改包"不如"造壳"时）
+遇到 §1 第 0 关判定的**服务端锁 App**（ChatGPT 这类），或想要某网页的原生入口，
+**与其硬改官方包，不如自己造一个 WebView 壳**（全新包名、官方签名规则不适用、无 integrity 锁）。
+本机（无电脑无 root）可搭出完整 APK 构建工具链：
+```bash
+bash scripts/build-toolchain/setup_toolchain.sh   # java+apktool+aapt2+framework，apt download+python 解包
+bash scripts/build-toolchain/build_apk.sh <proj> out.apk   # 编译 apktool 工程 + v1/v2 签名 + 校验
+```
+- 模板见 `templates/webview-shell/`：改包名/label/URL 三处即可包任意网页（maps.apple.com、任意 SPA）
+- 工具链坑（都已固化进脚本）：
+  - `apktool.yml` **必须含 `usesFramework.ids:[1]`**，否则 aapt2 link 找不到 android: 命名空间（"attribute android:name not found"）
+  - aapt2 缺 `libexpat.so.1`：Termux 无 expat 包，`cp /system/lib64/libexpat.so $TLIB/libexpat.so.1`
+  - java 依赖链：libandroid-shmem/spawn/glob/support + libc++/ffi/iconv/ncurses/pcre2/fmt/png/zlib 全要解到同一 lib 目录
+  - java 临时目录：`-Djava.io.tmpdir=$HOME/tmp`（默认 /tmp 不可写会 IOException）
+  - **smali 寄存器计数**是头号运行期坑：`.registers N` = 本地 + 参数(含 this)；数错 → VerifyError（见 §7 末）
+  - 反编译真实 App 再重编常卡在 `$` 前缀合成资源名（`$mtrl_checkbox_...` invalid entry）——所以造壳用**干净手写工程**，别改混淆大 App
+
+## 9. 文件清单
 - scripts/rebuild_splits.py — **改包首选**：整个 XAPK/split 套装一条命令重建（AXML minSdk + 保 services + 对齐）
 - scripts/kill_pairip.py — **拆锁首选**：PairIP/AppDetex 一键 neuter（自动探测 finish/finishAndRemoveTask，回归验证过）
 - scripts/build_single_apk.py — 单包合并版 AXML 补丁 + 对齐重建（仅在必须合成单包时用，注意 §2 教训）
@@ -199,6 +217,7 @@ adb shell "logcat -d | grep -aciE 'misalign|JavascriptException|FATAL'"   # 应�
 - scripts/dexpatch.py — 最小 DEX 编辑器（类/方法定位、方法体替换、header 重算）
 - scripts/verify_apk.py — 独立 v1+v2 校验器
 - scripts/adb-local/bootstrap_adb.sh — 本机 adb 自连
-- CASE-STUDY.md — 四个案例完整时间线（Grok / OpenBot 首攻 / OpenBot 返工 / ChatGPT）
-- scripts/adb-local/bootstrap_adb.sh — 本机 adb 自连
-- CASE-STUDY.md — 本次完整时间线与决策记录
+- scripts/build-toolchain/setup_toolchain.sh — 本机搭 java+apktool+aapt2+framework（§8）
+- scripts/build-toolchain/build_apk.sh — 用工具链编译 apktool 工程 + 签名一条龙（§8）
+- templates/webview-shell/ — 可复用 WebView 壳工程，改包名/label/URL 包任意网页（已回归验证可独立构建）
+- CASE-STUDY.md — 五个案例完整时间线（Grok / OpenBot 首攻 / OpenBot 返工 / ChatGPT 改包 / ChatGPT 登录边界 + 造壳）
