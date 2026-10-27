@@ -69,6 +69,7 @@ def resign(src, dst):
     for name,method,data,usize,dt,extattr,crc in out_entries:
         if method==0 and name.endswith(b'.so'): align=4096
         elif name==b'resources.arsc': align=4
+        elif method==0: align=8   # 所有 STORE 条目 ≥8 字节对齐：Hermes 的 index.android.bundle 靠 mmap 读，mod8!=0 会报 "Compiling JS failed: Buffer misaligned."
         else: align=1
         t,d=dosdate(dt)
         pad=(-(off+30+len(name)))%align
