@@ -41,8 +41,20 @@ unzip -l app.xapk                    # base.apk + config.*.apk + manifest.json �
 - ⚠️ **不是所有包都需要改 minSdk/重签**（OpenBot 实证）：先 `dumpsys package <pkg>` 看是否已装、直接启动抓 logcat 定位真实症状，再决定动哪层手术。
   OpenBot（run.openbot.mobile，APKPure）minSdk 24 < 设备 31，安装本来就成功——闪退纯粹是 PairIP，只需第 5 步 + 重签
 - 快速判症：`logcat -d | grep LicenseClient` 出现 `Could not bind with the licensing service: com.android.vending.licensing.ILicensingService` → 100% 是 PairIP
+- **侦察清单（每项都可能砍掉一整道工序，ChatGPT 案例靠它 15 分钟零试错）**：
+  1. AXML 真实 minSdk → 决定要不要改包
+  2. `targetSdk` 高**不用管**：targetSdk 高于设备 SDK **不拦安装**，只有 minSdk 拦（实测 target 37 装在 API 31 成功）
+  3. 扫全部 `classes*.dex` 找 `Lcom/pairip` / `appdetex` / `ILicensingService` → 决定要不要 dex 手术（ChatGPT 完全没有 → 直接省掉最硬核一步）
+  4. 有 `assets/index.android.bundle` → RN/Hermes，必须 STORE≥8 对齐；没有 → 原生应用，无此雷
+  5. Play Integrity 引用但无 PairIP → 通常不阻塞启动，先别拆，装了跑跑看
 
-## 2. 改包（build_single_apk.py 已实现，要点）
+## 2. 改包（**首选 scripts/rebuild_splits.py，一条命令搞定整个套装**）
+```bash
+python3 scripts/rebuild_splits.py app.xapk out/ --from 32 --to 31
+# 自动：每个 split 各自打 AXML minSdk + 保留 META-INF/services + 按对齐规则重建
+# 输出会报 services kept=N 与改动数；改动数 0 说明 --from 不等于真实 minSdk
+```
+（build_single_apk.py 是单包合并版，仅在不便用 split 套装时用；注意 §2 末的对齐/资源表教训）
 - **AXML 就地补丁**：解析 string pool + 遍历 chunk，只改 `uses-sdk/minSdkVersion` 的 int 值（同值 32 可能出现在别处如 maxSdkVersion，必须按元素名+属性名匹配）；重新 deflate，更新 CRC
 - **必须保留 `META-INF/services/*`**（ServiceLoader 描述符！删了 → kotlinx-coroutines Main dispatcher missing 崩溃）；只删签名三件套 .RSA/.SF/.MF 和 stamp-cert-sha256
   - ⚠️ **血泪重演警告**（OpenBot 复跑时又踩了一次）：自己临时手写重建循环时，**绝不允许** `if name.startswith('META-INF/'): continue` 这种一刀切。
@@ -154,14 +166,22 @@ adb shell "logcat -d | grep -aciE 'misalign|JavascriptException|FATAL'"   # 应�
 | 装上后一直卡住/白屏但不崩溃（RN 应用） | Hermes mmap bundle 偏移 mod8≠0 → `Compiling JS failed: Buffer misaligned.` | 全链路 STORE≥8 对齐（§2），改后重装 |
 | 用几分钟就闪退 | LicenseClient 周期复检定时器 | 第 5 步全量 neuter |
 | OAuth 回跳丢失 | App Links 验证失败 | pm set-app-links 2 all |
+| 新装 App 连不上境外服务（curl 却通） | VPN 分应用排除段 `10445-99999` 覆盖普通 App uid → 它**不走代理** | 去代理 App 勾选该 App / 改全局代理（每次装新 App 必查） |
 | adb 连不上（offline/零端点） | adbd 僵尸 | 无障碍远程开关 USB 调试重启 adbd |
+| adb server 突然没了（execl Permission denied） | 客户端无法自动 fork server | `nohup env LD_LIBRARY_PATH=... adb -P 5037 server nodaemon &` 再 connect |
+| 执行 pkill 后整条命令被 SIGTERM | `pkill -f` 匹配到自己 shell 的命令行 | 用 `pkill -x adb`（精确进程名），别对链路自身用 -f |
+| 下载下来的 xapk 只有几 MB / 不是 zip | 下载截断或反爬页 | 循环「下载→testzip→体积阈值」重试 |
 | 华为弹窗找不到关闭 | 纯净模式=多组件策略非单 App | 用 pm 会话安装直接绕开 |
 
 ## 8. 文件清单
-- scripts/build_single_apk.py — AXML minSdk 补丁 + 对齐重建单包（含 split 合并演示，注意 §2 的教训）
-- scripts/add_v1.py — v1 JAR 签名（折行/CRC 已修正版）
-- scripts/sign_v2.js — v2 签名（Node，需 node-forge；digests algo 已按 AOSP 修正）
+- scripts/rebuild_splits.py — **改包首选**：整个 XAPK/split 套装一条命令重建（AXML minSdk + 保 services + 对齐）
+- scripts/kill_pairip.py — **拆锁首选**：PairIP/AppDetex 一键 neuter（自动探测 finish/finishAndRemoveTask，回归验证过）
+- scripts/build_single_apk.py — 单包合并版 AXML 补丁 + 对齐重建（仅在必须合成单包时用，注意 §2 教训）
+- scripts/add_v1.py — v1 JAR 签名（折行/CRC/STORE≥8 对齐已修正；密钥走 `SIGN_KEY`/`SIGN_CERT` 环境变量）
+- scripts/sign_v2.js — v2 签名（Node，需 node-forge，路径走 `FORGE_PATH`；digests algo 已按 AOSP 修正）
 - scripts/dexpatch.py — 最小 DEX 编辑器（类/方法定位、方法体替换、header 重算）
 - scripts/verify_apk.py — 独立 v1+v2 校验器
+- scripts/adb-local/bootstrap_adb.sh — 本机 adb 自连
+- CASE-STUDY.md — 四个案例完整时间线（Grok / OpenBot 首攻 / OpenBot 返工 / ChatGPT）
 - scripts/adb-local/bootstrap_adb.sh — 本机 adb 自连
 - CASE-STUDY.md — 本次完整时间线与决策记录
