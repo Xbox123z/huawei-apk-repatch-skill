@@ -79,3 +79,49 @@ skill 自带的 add_v1.py 谓词本来是对的——**教训：复用 skill 脚
 ## 推论
 PairIP/AppDetex 是通用商业防盗版方案（Grok、OpenBot 都带）。
 「装上就闪退 + logcat 有 licensing service 绑定失败」→ 直接套 SKILL §5，命中率高。
+
+---
+
+# 第三案例：OpenBot 返工（Hermes 对齐雷，2026-10-27 下午）
+
+**用户反馈：「点击图标直接卡着不动」——我上一轮判定"成功"是错的。**
+
+## 我的验证失误（最重要的一课）
+上一轮我只验了三件事：`pidof` 有值、无 crash、`LicenseActivity` 出现 0 次 → 就宣布成功。
+实际 OpenBot 的窗口一直是 `mHasSurface=false / isVisible=false`：**进程活着，画面从没画出来过**。
+而且中途我还用错过 grep（`'Window.*openbot'` 匹配不到 `Window{...run.openbot.mobile/...MainActivity}` 跨行结构），
+把真阳性误读成"无窗口"，来回绕了几次。
+→ SKILL §6 新增「验收标准」小节：必须查 mHasSurface/isVisible + 截图肉眼确认。
+
+## 真实根因：Hermes mmap 对齐
+```
+HermesVM: Compiling JS failed: Buffer misaligned., sourceURL: index.android.bundle
+→ com.facebook.react.common.JavascriptException: [runtime not ready]
+```
+RN 的 JS bundle 由 Hermes **mmap 直接读取**，要求 zip 内数据偏移 **8 字节对齐**。
+排查过程（三次才定位）：
+1. 先怀疑我改坏了 bundle → 比对 sha1：原版与我的包**字节完全一致**，排除
+2. 改 rebuild 让 STORE 条目 8 对齐 → 仍报错 → 发现 **`add_v1.py` 会重写整个 zip**，它的对齐规则只管 .so/arsc，把 bundle 又挤歪了（偏移 mod8=1）
+3. 修 add_v1.py（method==0 一律 ≥8 对齐）→ 通过
+
+**更妙的是**：APKPure 原版包的 bundle 偏移 mod8=**4**，本身就是歪的。
+原版为什么能用？因为它被 PairIP 授权锁先杀掉了，**根本走不到 JS 加载那一步**。
+我把锁拆了，反而第一次触发了这个潜伏的对齐 bug——**两层防护互相掩盖，拆一层才炸另一层**。
+
+## 修复链（正确顺序，对齐必须在最后一步之后仍然成立）
+```
+rebuild(STORE≥8) → add_v1(STORE≥8，重写 zip 会毁对齐！) → sign_v2(只追加块，不动数据)
+```
+验证：`bundle 偏移 mod8=0` → 无 misalign → `mHasSurface=true` → 截图见登录页 → 交付。
+
+## 附带发现
+- OpenBot 含穿山甲/Pangle 广告 SDK（classes3/4.dex），与授权锁是独立的两条干扰线
+- 广告 SDK 的 `500013` 类错误在 UI 层，不影响启动，本案例未处理
+
+## 三次案例的成本曲线
+| 案例 | 步数 | 主要耗时 |
+|---|---|---|
+| Grok 1.2.50 | 100+ | 签名库 bug 排查 + dex 编码三轮试错 |
+| OpenBot 首攻 | ~20 | 顺利（skill 生效） |
+| OpenBot 返工 | ~25 | 验证方法错误导致绕路（已固化为 §6 验收标准） |
+
