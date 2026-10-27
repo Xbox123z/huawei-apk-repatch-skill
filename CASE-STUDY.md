@@ -223,5 +223,60 @@ Grok 能成功正是因为它只有前者、没有后者；ChatGPT 两者都有�
 | ChatGPT 改包 | ⚠️ 能装不能登录 | ~15 | 改包成功≠任务成功 |
 | ChatGPT 登录 | ❌ 能力边界 | — | **服务端完整性锁拆不了，要会识别会放弃** |
 
+---
+
+# 第六案例：从零造 App（本机 APK 构建工具链 + WebView 壳，2026-10-27）
+
+**背景**：ChatGPT 撞服务端锁后，用户提出——"用浏览器网页做一个能几乎 100% 复现功能的仿制 App"，
+目标是把 **Apple 地图（maps.apple.com）** 装进这台华为。这是本 skill 能力的升维：从"改别人的包"到"自己造包"。
+
+## 可行性侦察（先证明网页是真应用）
+```
+curl maps.apple.com（Mac Safari UA）→ 200，加载 /static/maps-app-web-client/mapkit.core.js
+curl maps.apple.com（Android 移动 UA）→ 200，14 处 mapkit，不跳 App Store
+```
+→ maps.apple.com 是**真正的 Apple 地图 Web 应用**（MapKit JS 引擎），WebView 壳方案成立。
+（对照：Grok/ChatGPT 网页版也是同理，网页壳能拿到 ≈ 原生体验。）
+
+## 本机搭工具链（无电脑、无 root、无 apt install 权限）
+Termux 源里其实**全套都有**（apktool/aapt2/d8/openjdk-17），但 dpkg 无 root 装不进 →
+`apt-get download *.deb` + **python 解 ar 归档 + data.tar(.zst|.xz)** 合并到自建 `tchain/` 目录。
+踩坑链（每一环都卡过，全部固化进 setup_toolchain.sh）：
+1. java 缺 `libandroid-shmem.so` → 下；又缺 `libandroid-spawn.so` → 下；又缺 `libz.so.1` → 下 zlib… **迭代 8 轮**补齐
+2. aapt2 缺 `libfmt`/`libpng16`/`libexpat.so.1` → 前两个 apt 有，**libexpat 没有对应包名** → `cp /system/lib64/libexpat.so $TLIB/libexpat.so.1` 借系统的
+3. java 默认临时目录 `/tmp` 不可写 → `-Djava.io.tmpdir=$HOME/tmp`
+4. apktool 缺 Android framework 资源表 → adb pull `/system/framework/framework-res.apk` → `apktool if` 注册
+5. **`LD_LIBRARY_PATH` 污染管道命令**（本 skill §0 老坑重现）：给 aapt2 设的 env 会让 `head`/`grep` 找不到 libandroid-support → 所有验证用命令替换 `out=$(...)` 隔离
+
+## 造壳的两个致命 bug（手写 smali）
+1. **`apktool.yml` 缺 `usesFramework.ids:[1]`** → aapt2 link 报 "attribute android:name not found"（android: 命名空间没加载）。真实解码产物有这个字段，手写工程必须照抄
+2. **`.registers` 计数错** → 编译期无警告，**运行期 VerifyError**：
+   - onCreate：用了 v0-v2 + p0/p1，我写 `.registers 4`（应为 5）→ v2 覆盖 p0(this) → "'this' argument java.lang.String not instance of Activity"
+   - onBackPressed：`.registers 2`（应为 3）→ "tried to get class from non-reference register v1(type=Boolean)"
+   规则：`.registers N`，N = 本地寄存器数 + 参数数（含 this）。修正后进程存活、零崩溃
+
+## 反编译真实 App 重编的死路（避坑）
+试过"改造真实发布的 WebGPT"（它本就是 chatgpt.com 的 WebView 壳）——但 apktool **重编**卡在
+Material 组件的 `$` 前缀合成资源名（`$mtrl_checkbox_button_...` invalid entry name）。
+→ **造壳用干净手写工程（templates/webview-shell/），别去重编混淆大 App**
+
+## 交付
+- `com.apple.maps`（6.3KB 极简 WebView 壳，桌面 Safari UA 加载 maps.apple.com）：安装成功、进程稳定、零崩溃
+- 模板 `templates/webview-shell/` 已回归验证可独立构建（改包名/label/URL 三处即可包任意网页）
+- 两个待用户侧动作（非技术障碍）：① 设备亮屏解锁后点图标（熄屏下 screencap 全黑、无 surface 属正常）
+  ② maps uid 落在 v2rayNG 排除段 → 地图瓦片要走代理（勾选该 App 或全局代理），否则空白
+- 顺带：ChatGPT 需求用**开源 WebGPT**（org.webgpt.app，已装）满足——它就是 chatgpt.com 的 WebView 壳，无 integrity 锁
+
+## 六案例总成本曲线（更新）
+| 案例 | 结果 | 核心教训 |
+|---|---|---|
+| Grok 1.2.50 | ✅ | 客户端 PairIP 可拆 |
+| OpenBot 首攻+返工 | ✅ | 侦察先行 / 渲染才是验收 |
+| ChatGPT 改包+登录 | ⚠️ | 服务端锁拆不了，会识别会放弃 |
+| **Apple 地图造壳** | ✅ | **改不动就自己造；本机可搭完整 APK 工具链** |
+
+**能力闭环**：本 skill 现在覆盖「改包重签 → dex 拆锁 → 识别服务端锁 → 放弃改包转自造 WebView 壳」全谱系。
+遇到服务端完整性锁的 App，正解不是硬啃，是 `templates/webview-shell` + 目标网页 URL。
+
 
 
