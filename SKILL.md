@@ -35,18 +35,34 @@ unzip -l app.xapk                    # base.apk + config.*.apk + manifest.json �
 # 检查 base 是否含 lib/（split 模式时 .so 在 config.<abi>.apk，resources.arsc 在 config.<lang>/<dpi>.apk）
 ```
 决策树：
+- 🛑 **第 0 关·先判锁在客户端还是服务端（ChatGPT 血案：不判就动手 = 白烧一整个战役）**
+  在改任何字节之前，先花 2 分钟确认这个 App 的授权/登录锁是不是**服务端强制**：
+  ```bash
+  # 扫 dex 找服务端完整性标志（这些出现 = 大概率服务端验，客户端 patch 无效）
+  python3 -c "import zipfile,sys; z=zipfile.ZipFile('base.apk'); [print(n, [p for p in [b'PlayIntegrity',b'playintegrity',b'preauth',b'DeviceCheck',b'attestation'] if p in z.read(n)]) for n in z.namelist() if n.endswith('.dex')]"
+  ```
+  **判据**：登录/报错页由**服务器返回**（如 `auth.xxx.com` 网页弹中文"身份验证错误 / preauth_cookie_device_check_failed"），
+  且错误要求一张 **Google Play Integrity / DeviceCheck 令牌** → **这是硬件级+服务端双重锁，本 skill 全套手术都救不了**：
+    - 令牌由设备 TrustZone 私钥签发，机型不在 Google 认证库（华为/部分国产受制裁机型）就发不出，无法伪造
+    - 重签名本身会让"应用完整性"维度必挂（Grok 能过是因为它只查 PairIP 纯客户端锁，不查 integrity）
+    - 降级找旧版也没用：旧版 dex 同样有 preauth（认证一直都在），且服务端往往已把旧版废弃（"此版本已过时"）
+  **→ 遇到这种，直接停手，转告用户用网页版（官方确认网页端不做设备认证）或换认证机型。不要改包。**
+  对照：PairIP/AppDetex/LVL 是**客户端**锁（本 skill 第 5 步能拆）；Play Integrity/DeviceCheck 是**服务端+硬件**锁（拆不了）。
 - minSdk 太高 → 需要改包重签（本 skill 主线）
 - 设备 SDK 与包差距 ≤ 几 → 优先找官方旧版本（apkeep -l -a <pkg> -d apk-pure 列版本；旧版可能免改包）
 - 授权 SDK（dex 里 grep `Lcom/pairip` / `appdetex` / `LVL`）→ 必须配合第 5 步 dex 拆锁
 - ⚠️ **不是所有包都需要改 minSdk/重签**（OpenBot 实证）：先 `dumpsys package <pkg>` 看是否已装、直接启动抓 logcat 定位真实症状，再决定动哪层手术。
   OpenBot（run.openbot.mobile，APKPure）minSdk 24 < 设备 31，安装本来就成功——闪退纯粹是 PairIP，只需第 5 步 + 重签
 - 快速判症：`logcat -d | grep LicenseClient` 出现 `Could not bind with the licensing service: com.android.vending.licensing.ILicensingService` → 100% 是 PairIP
-- **侦察清单（每项都可能砍掉一整道工序，ChatGPT 案例靠它 15 分钟零试错）**：
+- **侦察清单（每项都可能砍掉一整道工序）**：
   1. AXML 真实 minSdk → 决定要不要改包
   2. `targetSdk` 高**不用管**：targetSdk 高于设备 SDK **不拦安装**，只有 minSdk 拦（实测 target 37 装在 API 31 成功）
-  3. 扫全部 `classes*.dex` 找 `Lcom/pairip` / `appdetex` / `ILicensingService` → 决定要不要 dex 手术（ChatGPT 完全没有 → 直接省掉最硬核一步）
+  3. 扫全部 `classes*.dex` 找 `Lcom/pairip` / `appdetex` / `ILicensingService` → 决定要不要 dex 手术（纯客户端锁可拆）
   4. 有 `assets/index.android.bundle` → RN/Hermes，必须 STORE≥8 对齐；没有 → 原生应用，无此雷
-  5. Play Integrity 引用但无 PairIP → 通常不阻塞启动，先别拆，装了跑跑看
+  5. ⚠️ **扫到 `PlayIntegrity` / `preauth` / `attestation` → 高度警惕服务端锁（见第 0 关）**。
+     它可能不阻塞"启动/渲染"，但会**阻塞登录**（登录要服务器验设备令牌）。
+     **不要因为"能启动"就判断为可解**——ChatGPT 就是能装能渲染登录页、却在点登录后被服务端 `preauth_cookie_device_check_failed` 卡死。
+     正确做法：改包前先拿"这个 App 登录是否依赖 Play Integrity"问用户/查官网，或直接告知"能装但可能无法登录"的预期
 
 ## 2. 改包（**首选 scripts/rebuild_splits.py，一条命令搞定整个套装**）
 ```bash
@@ -167,6 +183,7 @@ adb shell "logcat -d | grep -aciE 'misalign|JavascriptException|FATAL'"   # 应�
 | 用几分钟就闪退 | LicenseClient 周期复检定时器 | 第 5 步全量 neuter |
 | OAuth 回跳丢失 | App Links 验证失败 | pm set-app-links 2 all |
 | 新装 App 连不上境外服务（curl 却通） | VPN 分应用排除段 `10445-99999` 覆盖普通 App uid → 它**不走代理** | 去代理 App 勾选该 App / 改全局代理（每次装新 App 必查） |
+| **能装能渲染登录页，点登录后服务器返回"身份验证错误 / preauth_cookie_device_check_failed"** | **Google Play Integrity 服务端+硬件双锁**：机型无 Google 认证 + 我们重签名 → 令牌发不出 | **本 skill 无法解决**。别改包了，转网页版（不做设备认证）或换认证机型。旧版也救不了（旧版同样有 preauth，且服务端常已废弃旧版） |
 | adb 连不上（offline/零端点） | adbd 僵尸 | 无障碍远程开关 USB 调试重启 adbd |
 | adb server 突然没了（execl Permission denied） | 客户端无法自动 fork server | `nohup env LD_LIBRARY_PATH=... adb -P 5037 server nodaemon &` 再 connect |
 | 执行 pkill 后整条命令被 SIGTERM | `pkill -f` 匹配到自己 shell 的命令行 | 用 `pkill -x adb`（精确进程名），别对链路自身用 -f |
