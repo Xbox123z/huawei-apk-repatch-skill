@@ -38,10 +38,16 @@ unzip -l app.xapk                    # base.apk + config.*.apk + manifest.json �
 - minSdk 太高 → 需要改包重签（本 skill 主线）
 - 设备 SDK 与包差距 ≤ 几 → 优先找官方旧版本（apkeep -l -a <pkg> -d apk-pure 列版本；旧版可能免改包）
 - 授权 SDK（dex 里 grep `Lcom/pairip` / `appdetex` / `LVL`）→ 必须配合第 5 步 dex 拆锁
+- ⚠️ **不是所有包都需要改 minSdk/重签**（OpenBot 实证）：先 `dumpsys package <pkg>` 看是否已装、直接启动抓 logcat 定位真实症状，再决定动哪层手术。
+  OpenBot（run.openbot.mobile，APKPure）minSdk 24 < 设备 31，安装本来就成功——闪退纯粹是 PairIP，只需第 5 步 + 重签
+- 快速判症：`logcat -d | grep LicenseClient` 出现 `Could not bind with the licensing service: com.android.vending.licensing.ILicensingService` → 100% 是 PairIP
 
 ## 2. 改包（build_single_apk.py 已实现，要点）
 - **AXML 就地补丁**：解析 string pool + 遍历 chunk，只改 `uses-sdk/minSdkVersion` 的 int 值（同值 32 可能出现在别处如 maxSdkVersion，必须按元素名+属性名匹配）；重新 deflate，更新 CRC
 - **必须保留 `META-INF/services/*`**（ServiceLoader 描述符！删了 → kotlinx-coroutines Main dispatcher missing 崩溃）；只删签名三件套 .RSA/.SF/.MF 和 stamp-cert-sha256
+  - ⚠️ **血泪重演警告**（OpenBot 复跑时又踩了一次）：自己临时手写重建循环时，**绝不允许** `if name.startswith('META-INF/'): continue` 这种一刀切。
+    正确谓词照抄 add_v1.py：`name=='stamp-cert-sha256' or (name.startswith('META-INF/') and name.endswith(('.RSA','.DSA','.EC','.SF','.MF')))`
+    症状：装上了、授权页也不弹了，但 MainActivity.onCreate 抛 `ExceptionInInitializerError: Module with the Main dispatcher is missing`
 - **对齐**：resources.arsc → STORE + 4 字节对齐；lib/**/*.so → STORE + 4096 对齐（Android 11+ 要求）；其余 deflate
 - **split 套装优先于单包合并**：把 config.mdpi 等资源硬并进单包会 `Resources$NotFoundException`（资源表 ID 不互通）。正确做法：每个 split 各自改 manifest、各自重签，用 `pm install-create/write -S <size> <sid> <name> <path> ×N; pm install-commit` 一次提交，框架自己叠加资源表
 - 每个 split 的 manifest 都有自己的 minSdk，**全部要改**（漏一个 → commit 时 INSTALL_FAILED_OLDER_SDK）
@@ -92,6 +98,11 @@ LicenseActivity 一出现进程即死 → 授权 SDK 在作祟。
 #      scheduleAppShutdown, startErrorDialogActivity, startPaywallActivity, handleError,
 #      createCloseAppIntentOrExitIfAppInBackground, exitApp/closeApp/closeAllTasks（Activity 侧）
 #    —— 只拆 Activity 不拆 Client 会「用着用着闪退」：Client 有周期复检定时器
+#    ⚠️ 找 finish 的 method_id 别硬编码：R8 可能把 Activity.finish 内联掉，dex 里根本没有该 method 引用
+#      （OpenBot 实证：只有 LicenseActivity 自己的 finishAndRemoveTask / ActivityManager$AppTask.finishAndRemoveTask）。
+#      正确做法：反汇编同类 exitApp/closeApp 看它实际调什么，或全表扫 name∈{finish,finishAndRemoveTask}
+#      且 owner 是该 Activity 自身（继承来的也能调），拿到 id 再写 35c。
+#      找不到就退回「super.onStart(); return-void」——不 finish 只是授权页多停一帧，比 patch 失败强。
 # d) 修完必须重算 header：sha1(dex[32:]) 写入 [12:32]，adler32(dex[12:]) 写入 [8:12]
 # e) 替换进 base.apk 时 classes.dex 用原 compress_type，CRC 用新内容
 ```
@@ -119,7 +130,9 @@ adb shell pm get-app-links <pkg>            # 确认 Domain verification state: 
 | 未包含任何证书（pm install） | v2 digests/signatures 算法 ID 不一致 | 两处都写签名算法 ID（0x103） |
 | INSTALL_FAILED_OLDER_SDK（commit 时） | 某个 split 的 minSdk 漏改 | 全部 split 都要改 |
 | Resources$NotFoundException | 单包合并破坏了 split 资源表 | 改走 split 套装安装 |
-| Main dispatcher is missing | 删了 META-INF/services | 保留全部非签名 META-INF |
+| Main dispatcher is missing | 删了 META-INF/services（即兴重写重建循环时高发） | 用 skill 自带 add_v1.py 谓词，别手搓 |
+| licensing service 绑定失败但界面无异常 | 该 App 的锁在 classes2/3.dex 不在 classes.dex | 遍历所有 dex 找 pairip 类 |
+| patch onStart 时找不到 Activity.finish 的 method_id | R8 已内联掉 finish | 反汇编 exitApp/closeApp 找真实退出调用（常见 finishAndRemoveTask） |
 | VerifyError invalid reg index | 3rc 的 word2 缺 count<<8 | word2=(count<<8)\|vstart |
 | VerifyError invalid arg count(0) | 35c 数量位写进 word2 | word0=(count<<12)\|op |
 | 整包 ClassNotFoundException | 清 tries 但没删 try_item 字节 | 不动元数据，入口 return 即可 |
