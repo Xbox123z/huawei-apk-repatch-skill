@@ -167,6 +167,7 @@ add_v1.py / sign_v2.js 改为环境变量喂路径：`SIGN_KEY` / `SIGN_CERT` / 
 
 ## 验收（§6 标准一次通过）
 `mHasSurface=true` + `isVisible=true` + crash 计数 0 + 截图见 "Welcome to ChatGPT" 登录页。
+⚠️ **但这只是"能启动能渲染"，不等于"能用"——登录卡在服务端设备认证，见第五案例。改包成功 ≠ 任务成功。**
 
 ## 四案例成本曲线
 | 案例 | 步数 | 说明 |
@@ -174,6 +175,53 @@ add_v1.py / sign_v2.js 改为环境变量喂路径：`SIGN_KEY` / `SIGN_CERT` / 
 | Grok 1.2.50 | 100+ | 从零探路，签名库 bug + dex 编码三轮试错 |
 | OpenBot 首攻 | ~20 | skill 生效 |
 | OpenBot 返工 | ~25 | 新坑（Hermes 对齐）+ 验证方法错误 |
-| ChatGPT | ~15 | **侦察砍掉一半工序，零试错** |
+| ChatGPT 改包 | ~15 | 侦察砍掉一半工序，能装能渲染——但登录失败（下案例） |
+
+---
+
+# 第五案例：ChatGPT 登录死锁（服务端完整性 = 本 skill 的能力边界，2026-10-27）
+
+**这是全系列最重要的一条：有些锁根本不该拆、也拆不了。识别它比拆它更值钱。**
+
+## 症状
+改包版（1.2026.286）能装能渲染登录页，但点登录 → 跳 `auth.openai.com` →
+服务器返回中文页「身份验证错误」，诊断码 `preauth_cookie_device_check_failed`。
+
+## 根因：Google Play Integrity 设备令牌（服务端验 + 硬件签）
+登录前 App 必须向 OpenAI 服务器出示一张由 **Google Play 服务**签发的设备完整性令牌，
+证明"认证过的真机 + 官方签名"。三前提本设备缺两个半：
+1. **机型不在 Google 认证库**（华为 CLS-AL00 受制裁，`ro.product.cert` 空）→ 发不出令牌，密钥烧在 TrustZone，无法伪造
+2. **应用非官方签名**（我们重签了）→ "应用完整性"维度必挂
+3. **检查在服务端** → 客户端怎么 patch 都没用
+
+## 走过的退路（全部堵死，但都是必要排查）
+- **降级官方旧版 1.2024.262**（minSdk 23 免改包、官方签名 v3 完整、无 DeviceCheck 代码）→
+  能装能跑，但**服务端已废弃旧版**：「此 ChatGPT 版本已过时」
+- 再查旧版 dex：`preauth`/`PlayIntegrity` **同样存在** → 设备认证一直都在，不是新版才加，降级无用
+- "已过时"文案在本地 config.zh.apk 的 arsc 里（客户端渲染），但触发它的是服务端版本判定，改文案无用
+
+## 关键判据（写进 SKILL §1 第 0 关）
+| 锁类型 | 标志 | 能否拆 |
+|---|---|---|
+| PairIP / AppDetex / LVL | 客户端 LicenseActivity，logcat 有 `Could not bind licensing service` | ✅ 第 5 步 dex 手术 |
+| **Play Integrity / DeviceCheck / attestation** | 登录页由**服务器**返回，要求设备令牌 | ❌ 硬件+服务端双锁，本 skill 全套无效 |
+
+Grok 能成功正是因为它只有前者、没有后者；ChatGPT 两者都有。**动手前先扫 dex 有没有
+`PlayIntegrity`/`preauth`/`attestation`——有就先假设可能是服务端锁，别急着改包。**
+
+## 交付给用户的正确结论
+- 原生 ChatGPT 在这台华为上**无法登录**（不是没努力，是物理/架构上做不到）
+- 可用替代：① GBox 里的 GPT（已绕过）② 网页版 chatgpt.com（官方确认不做设备认证）③ 换 Google 认证机型
+- **诚实说"做不到"比假装能修更有价值**——省掉用户和下一个 AI 的一整场空战
+
+## 五案例总成本曲线
+| 案例 | 结果 | 步数 | 核心教训 |
+|---|---|---|---|
+| Grok 1.2.50 | ✅ 成功 | 100+ | 客户端 PairIP 可拆 |
+| OpenBot 首攻 | ✅ 成功 | ~20 | 侦察先行 |
+| OpenBot 返工 | ✅ 成功 | ~25 | 渲染才是验收标准 |
+| ChatGPT 改包 | ⚠️ 能装不能登录 | ~15 | 改包成功≠任务成功 |
+| ChatGPT 登录 | ❌ 能力边界 | — | **服务端完整性锁拆不了，要会识别会放弃** |
+
 
 
