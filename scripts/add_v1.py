@@ -1,6 +1,6 @@
 import zipfile, struct, zlib, os, hashlib, base64, subprocess, sys, json
 
-KEY='key.pem'; CRT='cert.pem'
+KEY=os.environ.get('SIGN_KEY','key.pem'); CRT=os.environ.get('SIGN_CERT','cert.pem')
 CRLF='\r\n'
 
 def wrap(line):
