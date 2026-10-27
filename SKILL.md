@@ -48,7 +48,9 @@ unzip -l app.xapk                    # base.apk + config.*.apk + manifest.json �
   - ⚠️ **血泪重演警告**（OpenBot 复跑时又踩了一次）：自己临时手写重建循环时，**绝不允许** `if name.startswith('META-INF/'): continue` 这种一刀切。
     正确谓词照抄 add_v1.py：`name=='stamp-cert-sha256' or (name.startswith('META-INF/') and name.endswith(('.RSA','.DSA','.EC','.SF','.MF')))`
     症状：装上了、授权页也不弹了，但 MainActivity.onCreate 抛 `ExceptionInInitializerError: Module with the Main dispatcher is missing`
-- **对齐**：resources.arsc → STORE + 4 字节对齐；lib/**/*.so → STORE + 4096 对齐（Android 11+ 要求）；其余 deflate
+- **对齐**：resources.arsc → STORE + 4 字节对齐；lib/**/*.so → STORE + 4096 对齐（Android 11+ 要求）；**其余所有 STORE 条目 → ≥8 字节对齐**（React Native/Hermes 的 assets/index.android.bundle 靠 mmap 读取，偏移 mod8≠0 → `Compiling JS failed: Buffer misaligned.` → 界面永远白屏卡住但不崩溃）
+  - ⚠️ **对齐必须在整条链上保持一致**：rebuild → add_v1（重写 zip！）→ sign_v2。任何一步用旧对齐规则都会把前面步骤的对齐毁掉。add_v1.py 已修正（method==0 一律 ≥8 对齐）
+  - ⚠️ **原版包自己可能就是歪的**（OpenBot 实证：APKPure 原版 bundle 偏移 mod8=4）——原版被授权锁先杀掉所以从没走到 JS 加载，拆锁后这颗雷才炸出来。**拆锁后必须全链路重新验证渲染**
 - **split 套装优先于单包合并**：把 config.mdpi 等资源硬并进单包会 `Resources$NotFoundException`（资源表 ID 不互通）。正确做法：每个 split 各自改 manifest、各自重签，用 `pm install-create/write -S <size> <sid> <name> <path> ×N; pm install-commit` 一次提交，框架自己叠加资源表
 - 每个 split 的 manifest 都有自己的 minSdk，**全部要改**（漏一个 → commit 时 INSTALL_FAILED_OLDER_SDK）
 
@@ -123,6 +125,19 @@ adb shell pm get-app-links <pkg>            # 确认 Domain verification state: 
 # 华为省电误杀：adb shell dumpsys deviceidle whitelist +<pkg>；cmd appops set <pkg> RUN_IN_BACKGROUND allow
 ```
 
+### ⚠️ 验收标准（OpenBot 教训：我在这条上栽了两次，别信"进程活着"）
+**pidof 有值 + 无 crash 记录 ≠ App 可用。** 必须验证画面真的渲染出来了：
+```bash
+# 判据（三选二即可确认，全过最稳）：
+adb shell "dumpsys window windows" | grep -aA8 "Window.*<pkg>/.*Activity" | grep -aE "mHasSurface|isVisible"
+#   → 必须 mHasSurface=true 且 isVisible=true（false = 卡住/白屏，即使进程活着）
+adb shell "screencap -p" > /path/shot.png      # 截图肉眼确认 UI 内容
+adb shell "logcat -d | grep -aciE 'misalign|JavascriptException|FATAL'"   # 应为 0
+```
+- 采样时注意：grep 窗口状态要**跨行匹配**（`grep -aA8` 后再过滤 mHasSurface），单行 grep 会假阴性
+- 用户报「卡着不动」而日志一切正常时，**第一反应就是查 mHasSurface 而不是查崩溃**
+- RN 应用（有 index.android.bundle / Hermes）拆锁后必查：`logcat | grep -i "Compiling JS failed"`
+
 ## 7. 排障速查
 | 症状 | 真因 | 处置 |
 |---|---|---|
@@ -136,6 +151,7 @@ adb shell pm get-app-links <pkg>            # 确认 Domain verification state: 
 | VerifyError invalid reg index | 3rc 的 word2 缺 count<<8 | word2=(count<<8)\|vstart |
 | VerifyError invalid arg count(0) | 35c 数量位写进 word2 | word0=(count<<12)\|op |
 | 整包 ClassNotFoundException | 清 tries 但没删 try_item 字节 | 不动元数据，入口 return 即可 |
+| 装上后一直卡住/白屏但不崩溃（RN 应用） | Hermes mmap bundle 偏移 mod8≠0 → `Compiling JS failed: Buffer misaligned.` | 全链路 STORE≥8 对齐（§2），改后重装 |
 | 用几分钟就闪退 | LicenseClient 周期复检定时器 | 第 5 步全量 neuter |
 | OAuth 回跳丢失 | App Links 验证失败 | pm set-app-links 2 all |
 | adb 连不上（offline/零端点） | adbd 僵尸 | 无障碍远程开关 USB 调试重启 adbd |
