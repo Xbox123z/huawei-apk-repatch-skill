@@ -1,3 +1,5 @@
+> ⚠️ **先读 [SAFETY-RULES.md](SAFETY-RULES.md)**：本 skill 的最高优先红线（永不破坏用户网络；任何全局设置必须成对回滚并校验）。
+
 # Skill: 在低版本 Android / 华为 EMUI 上强装高要求 APK（重签名 + dex 拆锁 + 本机 adb 自连）
 
 > 实战来源：在 Huawei CLS-AL00（EMUI 12 / Android 12 / SDK 31，无 GMS、无 root、无电脑 ADB）上
@@ -221,4 +223,3 @@ bash scripts/build-toolchain/build_apk.sh <proj> out.apk   # 编译 apktool 工�
 - scripts/build-toolchain/build_apk.sh — 用工具链编译 apktool 工程 + 签名一条龙（§8）
 - templates/webview-shell/ — 可复用 WebView 壳工程，改包名/label/URL 包任意网页（已回归验证可独立构建）
 - CASE-STUDY.md — 五个案例完整时间线（Grok / OpenBot 首攻 / OpenBot 返工 / ChatGPT 改包 / ChatGPT 登录边界 + 造壳）
-- CASE-07-offline-static-site.md — **整站离线化造 App**（jyywiki.cn：850 页 / 230 MB / 断网可读；含 5 个 smali 坑与「不被系统外跳浏览器」的延迟加载修法）
