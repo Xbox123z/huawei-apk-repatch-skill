@@ -226,3 +226,4 @@ bash scripts/build-toolchain/build_apk.sh <proj> out.apk   # 编译 apktool 工�
 - CASE-07-offline-static-site.md — **整站离线化造 App**（jyywiki.cn：850 页 / 230 MB / 断网可读；含 5 个 smali 坑与「不被系统外跳浏览器」的延迟加载修法）
 
 | [CASE-08](CASE-08-game-region-and-free-proxy.md) | 腾讯游戏区域限制逆向、免费代理不可行性实证、代理池保活架构 |
+| [CASE-09](CASE-09-tor-obfs4-free-egress.md) | 无 VPN 零成本境外出口：Tor 0.4.9 + obfs4 桥 + 链式代理（含自愈） |
