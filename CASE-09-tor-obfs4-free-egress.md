@@ -92,6 +92,26 @@ rules: [MATCH,us-east]
     不是 → 重启 mihomo
 ```
 
+## 三·补：链路不稳的真正原因与「保温」解法（关键）
+
+实测：
+- 经 Tor 到目标节点端口的耗时 **3.7–6.0 秒**
+- **mihomo 的拨号超时约 5 秒**（不暴露配置项）
+- 二者正好卡在临界点 → 链路时通时不通，日志 `context deadline exceeded`
+
+解法：**让 Tor 电路始终保持热态**
+```python
+# 每 12 秒经 Tor 打一次轻量请求
+curl --socks5-hostname 127.0.0.1:9075 -o /dev/null https://www.gstatic.com/generate_204
+```
+效果（同一链路、同样节点）：
+| 状态 | 成功率 |
+|---|---|
+| 保温前 | 9/10 → 衰减到 0/10 |
+| 保温后 | **5/5，随后 10/10**，出口恒为 US |
+
+配套：`watchdog` 在重启 mihomo 前先经 Tor 预热两次，避免把"冷启动超时"误判为链路故障。
+
 ## 四、给 v2rayNG 用
 
 `ws` 明文节点会被 v2rayNG（Xray 26.2.6+）直接拒绝：
