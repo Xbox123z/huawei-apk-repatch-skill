@@ -224,3 +224,5 @@ bash scripts/build-toolchain/build_apk.sh <proj> out.apk   # 编译 apktool 工�
 - templates/webview-shell/ — 可复用 WebView 壳工程，改包名/label/URL 包任意网页（已回归验证可独立构建）
 - CASE-STUDY.md — 五个案例完整时间线（Grok / OpenBot 首攻 / OpenBot 返工 / ChatGPT 改包 / ChatGPT 登录边界 + 造壳）
 - CASE-07-offline-static-site.md — **整站离线化造 App**（jyywiki.cn：850 页 / 230 MB / 断网可读；含 5 个 smali 坑与「不被系统外跳浏览器」的延迟加载修法）
+
+| [CASE-08](CASE-08-game-region-and-free-proxy.md) | 腾讯游戏区域限制逆向、免费代理不可行性实证、代理池保活架构 |
